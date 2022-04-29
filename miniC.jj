@@ -1,0 +1,812 @@
+PARSER_BEGIN(miniC)
+import java.util.*;
+import java.io.*;
+
+public class miniC {
+
+    private static Stack<pair> expStack = new Stack<pair>();
+    private static Stack<Object> ss = new Stack<Object>();
+    private static Stack<ScopeLevel> currentScope = new Stack<ScopeLevel>();
+    private static Hashtable<String, String> strings = new Hashtable<String, String>();
+    private static Hashtable<String, ArrayList<GenQuad>> functions = new Hashtable<String, ArrayList<GenQuad>>();
+    private static String currentFunction;
+    private static ArrayList<GenQuad> PB; /* La pile qui contient le code intermédiaire */
+    private static int quadC; /* Indice du quadruplet courant */
+
+    public static int getCurrentAddr() {
+        return Scope.getCurrentAddr();
+    }
+
+    public Hashtable<String, ArrayList<GenQuad>> getFunctions() {
+        return functions;
+    }
+
+    public static String setString(String string) {
+        String name = "STRING" + strings.size();
+
+        StringBuilder value = new StringBuilder( "'" + string.substring(1,string.length() - 1) + "$'");
+
+        int from = 0;
+        while(value.indexOf("\\n",from) != -1)
+        {
+            from = value.indexOf("\\n",from);
+            value.replace(from, from+"\\n".length(), "' , CR , LF , '");
+            from++;
+        }
+
+        from = 0;
+        while(value.indexOf("\\t",from) != -1)
+        {
+            from = value.indexOf("\\t",from);
+            value.replace(from, from+"\\t".length(), "' , TAB , '");
+            from++;
+        }
+
+        from = 0;
+        while(value.indexOf("'' ,",from) != -1)
+        {
+            from = value.indexOf("'' ,",from);
+            value.replace(from, from+"'' ,".length(), "");
+            from++;
+        }
+
+        strings.put(name , value.toString());
+
+        return name;
+    }
+
+    private static void defineFunction(String input) throws ParseException {
+        if(functions.containsKey(input))
+        {
+            throw new ParseException("La fonction '" + input
+                        + "' est déjà définie.");
+        }
+
+        currentFunction = input;
+
+        PB = new ArrayList<GenQuad>();
+        quadC = 0;
+        functions.put(input,PB);
+    }
+
+    static class GenQuad {
+
+        private String part1 ,part2, part3;
+
+        public GenQuad(Object part1, Object part2, Object part3) {
+            super();
+
+            if(part1 != null){
+                this.part1 = "" + part1;
+            }
+            if(part2 != null){
+                this.part2 = "" + part2;
+            }
+            if(part3 != null){
+                this.part3 = "" + part3;
+            }
+        }
+
+        public String getPart1() {
+            return part1;
+        }
+
+        public void setPart1(String part1) {
+            this.part1 = part1;
+        }
+
+        public String getPart2() {
+            return part2;
+        }
+
+        public void setPart2(String part2) {
+            this.part2 = part2;
+        }
+
+        public String getPart3() {
+            return part3;
+        }
+
+        public void setPart3(String part3) {
+            this.part3 = part3;
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder output = new StringBuilder();
+
+            if(part1 != null){
+                output.append(part1);
+            }
+            if(part2 != null){
+                output.append(" " + part2);
+            }
+            if(part3 != null){
+                output.append(", " + part3);
+            }
+
+            return output.toString();
+        }
+
+    }
+
+    static class ScopeLevel {
+        private Stack<Scope> currentScope = new Stack<Scope>();
+
+        public ScopeLevel() {
+        }
+
+        public static int getCurrentAddr(){
+            return Scope.getCurrentAddr();
+        }
+
+        public static void setCurrentAddr(int currentAddr){
+            Scope.setCurrentAddr(currentAddr);
+        }
+
+        public void addScope() {
+            Scope s = null;
+            if(currentScope.isEmpty()){
+                s =  new Scope(null);
+            }else{
+                s =  new Scope(currentScope.peek());
+            }
+            currentScope.add(s);
+        }
+
+        public void deleteScope() {
+            currentScope.pop();
+        }
+
+        public int addVariable(String input) throws ParseException {
+            return currentScope.peek().makeAddr(input);
+        }
+
+        public int findVariable(String input) throws ParseException {
+            return currentScope.peek().findAddr(input);
+        }
+    }
+
+    static class Scope {
+
+        private static int currentAddr;
+        private Scope parent;
+        private Hashtable<String, Integer> vars = new Hashtable<String, Integer>();
+
+        static {
+            currentAddr = 0;
+        }
+
+        public Scope(Scope parent) {
+            this.parent = parent;
+        }
+
+        public int findAddr(String input) throws ParseException {
+
+            Scope t = this;
+            while (t != null) {
+                if (t.getVars().containsKey(input)) {
+                    return t.getVars().get(input);
+                }
+                t = t.getParent();
+            }
+
+            throw new ParseException("Unknown variable '" + input
+                    + "'.define it first.");
+        }
+
+        public int makeAddr(String input) throws ParseException {
+
+            Scope t = this;
+            while (t != null) {
+                if (t.getVars().containsKey(input)) {
+                    throw new ParseException("Variable '" + input
+                            + "' has already been defined.");
+                }
+                t = t.getParent();
+            }
+
+            vars.put(input, currentAddr);
+
+            int temp = currentAddr;
+            // 2 bytes for every variable
+            currentAddr += 2;
+
+            return temp;
+        }
+
+        public static int getCurrentAddr() {
+            return currentAddr;
+        }
+
+        public static void setCurrentAddr(int currentAddr) {
+            Scope.currentAddr = currentAddr;
+        }
+
+        public Scope getParent() {
+            return parent;
+        }
+
+        public void setParent(Scope parent) {
+            this.parent = parent;
+        }
+
+        public Hashtable<String, Integer> getVars() {
+            return vars;
+        }
+
+        public void setVars(Hashtable<String, Integer> vars) {
+            this.vars = vars;
+        }
+
+    }
+
+    private static void callFunction(String input) throws ParseException {
+        if(!functions.containsKey(input))
+        {
+            throw new ParseException("Fonction inconnue '" + input
+                + "'.Veuillez la définir d'abord.");
+        }
+    }
+
+    public static ArrayList<GenQuad> getPB() {
+        return PB;
+    }
+
+    public static Hashtable<String, String> getStrings() {
+        return strings;
+    }
+
+    private static int getTemp() {
+        int temp = currentScope.peek().getCurrentAddr();
+        currentScope.peek().setCurrentAddr(temp + 2);
+        return temp;
+    }
+
+    private static String getAddr(Object s, String first) {
+        String output = getAddr(s);
+        if (output.startsWith("BASE + ")) {
+            return first + output;
+        }
+        return output;
+    }
+
+    private static String getAddr(Object s) {
+
+        if (s instanceof Integer) {
+            s = (Integer) s;
+
+            return ("BASE + " + s.toString());
+        }
+
+        return ((String) s).substring(1);
+    }
+
+    public static int toInt(Object obj)
+    {
+        if(obj instanceof Number) {
+             return ((Number) obj).intValue();
+        }
+        String s = obj.toString();
+        char[] mysChars = s.toCharArray();
+        if(mysChars[0]=='#') {mysChars[0]='0';}
+        s = String.valueOf(mysChars);
+        return Integer.parseInt(s);
+    }
+
+    private static void compare(String input) {
+        int jp3 = (Integer) ss.pop();
+        int jp4 = (Integer) ss.pop();
+        int jp10 = (Integer) ss.pop();
+        int jp11;
+
+        switch (input) {
+            case "==":
+
+                jp11 = (Integer) ss.pop();
+                PB.set(jp11, new GenQuad("mov", "BX", getAddr(ss.pop())));
+                PB.set(jp10, new GenQuad("mov", "AX", getAddr(ss.pop())));
+                PB.set(jp4, new GenQuad("cmp", "AX", "BX"));
+                PB.set(jp3, new GenQuad("jne", "ETQ" + currentFunction + (quadC), null));
+                break;
+            case "!=":
+                jp11 = (Integer) ss.pop();
+                PB.set(jp11, new GenQuad("mov", "BX", getAddr(ss.pop())));
+                PB.set(jp10, new GenQuad("mov", "AX", getAddr(ss.pop())));
+                PB.set(jp4, new GenQuad("cmp", "AX", "BX"));
+                PB.set(jp3, new GenQuad("je", "ETQ" + currentFunction + (quadC), null));
+                break;
+            case "<":
+                jp11 = (Integer) ss.pop();
+                PB.set(jp11, new GenQuad("mov", "BX", getAddr(ss.pop())));
+                PB.set(jp10, new GenQuad("mov", "AX", getAddr(ss.pop())));
+                PB.set(jp4, new GenQuad("cmp", "AX", "BX"));
+                PB.set(jp3, new GenQuad("jge", "ETQ" + currentFunction + (quadC), null));
+                break;
+            case ">":
+                jp11 = (Integer) ss.pop();
+                PB.set(jp11, new GenQuad("mov", "BX", getAddr(ss.pop())));
+                PB.set(jp10, new GenQuad("mov", "AX", getAddr(ss.pop())));
+                PB.set(jp4, new GenQuad("cmp", "AX", "BX"));
+                PB.set(jp3, new GenQuad("jle", "ETQ" + currentFunction + (quadC), null));
+                break;
+            case ">=":
+                jp11 = (Integer) ss.pop();
+                PB.set(jp11, new GenQuad("mov", "BX", getAddr(ss.pop())));
+                PB.set(jp10, new GenQuad("mov", "AX", getAddr(ss.pop())));
+                PB.set(jp4, new GenQuad("cmp", "AX", "BX"));
+                PB.set(jp3, new GenQuad("jl", "ETQ" + currentFunction + (quadC), null));
+                break;
+            case "<=":
+                jp11 = (Integer) ss.pop();
+                PB.set(jp11, new GenQuad("mov", "BX", getAddr(ss.pop())));
+                PB.set(jp10, new GenQuad("mov", "AX", getAddr(ss.pop())));
+                PB.set(jp4, new GenQuad("cmp", "AX", "BX"));
+                PB.set(jp3, new GenQuad("jg", "ETQ" + currentFunction + (quadC), null));
+                break;
+        }
+
+    }
+
+    private static void codeGen(String action, String input, String type, String args ) throws ParseException{
+
+        switch (action) {
+
+            case "#createFunction":
+                defineFunction(input);
+                break;
+            case "#callFunction":
+                callFunction(input);
+                PB.add(new GenQuad("CALL", input,null ));
+                quadC++;
+                break;
+            case "#startScopeLevel":
+                currentScope.push(new ScopeLevel());
+                break;
+            case "#endScopeLevel":
+                currentScope.pop();
+                break;
+            case "#scopeStart":
+                currentScope.peek().addScope();
+                break;
+            case "#scopeEnd":
+                currentScope.peek().deleteScope();
+                break;
+            case "#const":
+                ss.push("#" + input);
+                break;
+            case "#variableDef":
+                int a = currentScope.peek().addVariable(input);
+                ss.push(a);
+                break;
+            case "#pid":
+                int p = currentScope.peek().findVariable(input);
+                ss.push(p);
+                break;
+            case "#add":
+                int t = getTemp();
+                PB.add(new GenQuad("mov", "CX", getAddr(ss.pop())));
+                quadC++;
+                PB.add(new GenQuad("add", "CX", getAddr(ss.pop())));
+                quadC++;
+                PB.add(new GenQuad("mov", getAddr(t), "CX"));
+                quadC++;
+
+                ss.push(t);
+                break;
+            case "#mines":
+                int t1 = getTemp();
+                String str2 = getAddr(ss.pop());
+                PB.add(new GenQuad("mov", "CX", getAddr(ss.pop())));
+                quadC++;
+                PB.add(new GenQuad("sub", "CX", str2));
+                quadC++;
+                PB.add(new GenQuad("mov", getAddr(t1), "CX"));
+                quadC++;
+                ss.push(t1);
+                break;
+            case "#mul":
+                int t2 = getTemp();
+                PB.add(new GenQuad("mov", "CX", getAddr(ss.pop())));
+                quadC++;
+                PB.add(new GenQuad("mov", "AL", getAddr(ss.pop(), "BYTE PTR ")));
+                quadC++;
+                PB.add(new GenQuad("mul", "CL", null));
+                quadC++;
+                PB.add(new GenQuad("mov", getAddr(t2), "AX"));
+                quadC++;
+                ss.push(t2);
+                break;
+            case "#div":
+                int t3 = getTemp();
+                String pa2 = getAddr(ss.pop(), "BYTE PTR ");
+                PB.add(new GenQuad("mov", "AX", getAddr(ss.pop())));
+                quadC++;
+                PB.add(new GenQuad("mov", "CL", pa2));
+                quadC++;
+                PB.add(new GenQuad("div", "CL", null));
+                quadC++;
+                PB.add(new GenQuad("mov", getAddr(t3, "BYTE PTR "), "AL"));
+                quadC++;
+                ss.push(t3);
+                break;
+            case "#assign":
+                PB.add(new GenQuad("mov", "AX", getAddr(ss.pop())));
+                quadC++;
+                PB.add(new GenQuad("mov", getAddr(ss.pop()), "AX"));
+                quadC++;
+                break;
+            case "#label":
+                PB.add(new GenQuad("ETQ" + currentFunction + quadC + ":", null, null));
+                ss.push(quadC);
+                quadC++;
+                break;
+            case "#save":
+                PB.add(new GenQuad("save", null, null));
+                ss.push(quadC);
+                quadC++;
+                break;
+            case "#save_pointer":
+                PB.add(new GenQuad("ETQ" + currentFunction + quadC + ":", null, null));
+                ss.push(quadC);
+                quadC++;
+                break;
+            case "#while":
+                compare(input);
+                PB.add(new GenQuad("jmp", "ETQ" + currentFunction + ss.pop(), null));
+                PB.add(new GenQuad("ETQ" + currentFunction + quadC + ":", null, null));
+                quadC++;
+                quadC++;
+                break;
+            case "#jpf_save":
+                compare(input);
+
+                PB.add(new GenQuad("save", null, null));
+                ss.push(quadC);
+
+                PB.add(new GenQuad("ETQ" + currentFunction + quadC + ":", null, null));
+                quadC++;
+                quadC++;
+                break;
+            case "#jp":
+                PB.set(toInt(ss.pop()), new GenQuad("jmp", "ETQ" + currentFunction + quadC, null));
+                break;
+            case "#jpf":
+                compare(input);
+
+                PB.add(new GenQuad("ETQ" + currentFunction + quadC + ":", null, null));
+                quadC++;
+                break;
+            case "#jp_statement":
+                PB.add(new GenQuad("jmp", null, null));
+                ss.push(quadC);
+                quadC++;
+                break;
+            case "#for_jp_statement":
+                PB.add(new GenQuad("ETQ" + currentFunction + quadC + ":", null, null));
+                ss.push(quadC);
+                quadC++;
+                break;
+            case "#for":
+                int jp_statement = toInt(ss.pop());
+                int jp_condition = toInt(ss.pop());
+                int step_pointer = toInt(ss.pop());
+                int jp_after_condition = toInt(ss.pop());
+
+                if(!input.equals("nothing"))
+                {
+                    compare(input);
+                }
+
+                int befor_condition = toInt(ss.pop());
+
+                PB.set(jp_condition, new GenQuad("jmp", "ETQ" + currentFunction + befor_condition, null));
+                PB.set(jp_after_condition, new GenQuad("jmp", "ETQ" + currentFunction + jp_statement, null));
+
+                PB.add(new GenQuad("jmp", "ETQ" + currentFunction + step_pointer, null));
+                PB.add(new GenQuad("ETQ" + currentFunction + quadC + ":", null, null));
+                quadC++;
+                quadC++;
+                break;
+            case "#end":
+                PB.add(new GenQuad("ETQ" + currentFunction + quadC + ": ", null, null));
+                quadC++;
+                int k = 0;
+                System.out.println("==================== Code généré ====================");
+                StringBuilder sb = new StringBuilder();
+                for (GenQuad c : PB)
+                {
+                    sb.append(k+" :\t");
+                    sb.append(c.toString());
+                    sb.append("\n");
+                    k++;
+                }
+                System.out.println(sb);
+                System.out.println("======================================================");
+                break;
+        }
+
+    }
+
+    static void preStack(pair p) throws ParseException
+    {
+          String part1 = p.part1;
+          switch(part1)
+          {
+            	case "#add":
+      	  		case "#mines":
+      	  		case "#div":
+      	  		case "#mul":
+      	  			while(!expStack.isEmpty() && precedence(expStack.peek().part1) >= precedence(part1))
+      	  			{
+      	  			  	pair pa = expStack.pop();
+      	  			  	codeGen(pa.part1,pa.part2, "", "");
+      	  			}
+      	  			expStack.push(p);
+      	  			break;
+      	  		case "#OP":
+      	  			expStack.push(p);
+      	  			break;
+      	  		case "#CP":
+      	  			while(!expStack.peek().part1.equals("#OP") )
+      	  			{
+      	  			  	pair pa = expStack.pop();
+      	  			  	codeGen(pa.part1,pa.part2, "", "");
+      	  			}
+      	  			expStack.pop();
+      	  		case "#finish":
+      	  			while(!expStack.isEmpty())
+      	  			{
+      	  			  	pair pa = expStack.pop();
+      	  			  	codeGen(pa.part1,pa.part2, "", "");
+      	  			}
+      	  		case "#pid":
+      	  		case "#const":
+      	  			codeGen(p.part1,p.part2, "", "");
+      	  			break;
+          }
+    }
+
+    static int precedence(String opt)
+    {
+        switch(opt)
+        {
+            case "#add":
+            case "#mines":
+                return 1;
+            case "#div":
+            case "#mul":
+                return 2;
+            default:
+                return 0;
+        }
+    }
+    static class pair
+    {
+        public static String part1 , part2;
+
+        public pair(String part1,String part2)
+        {
+            this.part1 = part1;
+            this.part2 = part2;
+        }
+
+    }
+
+
+
+
+
+
+    public static void main(String args []) throws ParseException
+    {
+
+    miniC parser = new miniC(System.in);
+    while (true)
+    {
+      System.out.println("\nUtilisation de la ligne de commande ...");
+
+      try
+      {
+        System.out.println("Veuillez entrer votre code ...");
+        miniC.Start();
+      }
+      catch (Exception e)
+      {
+        System.out.println("Erreur syntaxique.");
+        System.out.println(e.getMessage());
+        miniC.ReInit(System.in);
+      }
+      catch (Error e)
+      {
+        System.out.println("Erreur.");
+        System.out.println(e.getMessage());
+        break;
+      }
+
+    }
+  }
+}
+PARSER_END(miniC)
+
+SKIP : {
+ " "
+|  "\t"
+|  "\n"
+|  "\r"
+|  <"//" (~["\n","\r"])* ("\n" | "\r" | "\r\n")>
+|  <"/*" (~["*"])* "*" ("*" | ~["*","/"] (~["*"])* "*")* "/">
+}
+
+TOKEN : {
+    <TYPE: <INT> | <FLOAT>  >            |
+    <IF:   "if"  >                      |
+    <ELSE:   "else"  >                      |
+    <#INT: "int" >                      |
+    <#FLOAT: "float" >                    |
+    <WHILE: "while" >                   |
+    <FOR: "for" >                                       
+}
+
+TOKEN: {
+    <ID: <LETTER> (<LETTER> | <DIGIT> | <ZERO>)* >                  |
+    <NUMBER: <DIGIT> (<DIGIT> | <ZERO>)* | <ZERO> >                          |
+    <#LETTER: ["a"-"z","A"-"Z"] >                                   |
+    <#DIGIT: ["1"-"9"] >                                            |
+    <#ZERO: "0" >
+}
+
+TOKEN: {
+    <GPAR: "(" > |
+    <DPAR: ")" > |
+    <VIRGULE:     "," > |
+    <GACC: "{" > |
+    <DACC: "}" > |
+    <POINTVIRGULE: ";" > |
+    <AFFECT:    "=" > |
+    <EQ:       "==" > |
+    <LT:       "<"  > |
+    <LTE:      "<=" > |
+    <GT:       ">"  > |
+    <GTE:      ">=" > |
+    <NEQ:      "!=" > |
+    <ADD:       "+" > |
+    <SUB:       "-" > |
+    <MUL:       "*" > |
+    <DIV:       "/" >
+}
+
+void Start() : {}
+{
+    (Function())*
+    < EOF >
+}
+
+void ArgList() : {}
+{
+    Arg() (<VIRGULE> Arg())*
+}
+
+void Arg() : {}
+{
+    <TYPE> <ID>
+}
+
+
+void Function() :
+{
+ Token id;
+}
+{
+    { codeGen( "#startScopeLevel" , "", "", ""); }
+    <TYPE> id = <ID> <GPAR> [ArgList()] <DPAR> { codeGen( "#createFunction", id.image, "", "" ); }
+
+       StatementBlockDef()
+
+    { codeGen( "#end" , "", "", ""); }
+    { codeGen( "#endScopeLevel" , "", "", ""); }
+}
+
+void varList():{
+Token id;
+}
+{
+ ((id = < ID > { codeGen( "#variableDef" , id.image, "", "" ); }))
+      (<AFFECT> ExprAssign() {preStack(new pair( "#finish" , "" ));}{ codeGen( "#assign" , "", "", "" ); })?
+}
+
+
+void varDefineDef() :
+{
+  Token id;
+}
+{
+      ((<TYPE> id = < ID > { codeGen( "#variableDef" , id.image, "", "" ); }))
+     (<AFFECT> ExprAssign() {preStack(new pair( "#finish" , "" ));}{ codeGen( "#assign" , "", "", "" ); })? (<VIRGULE> varList() )*
+}
+
+
+void StatementBlockDef() : {}
+{
+    <GACC> { codeGen( "#scopeStart" , "", "", ""); } (Stmt())*  { codeGen( "#scopeEnd" , "", "", ""); }  <DACC>
+}
+
+void Stmt() : {}
+{
+    varDefineDef() <POINTVIRGULE>     |
+    Expr() <POINTVIRGULE>             |
+    IfStmt()                          |
+    ForStmt()                         |
+    WhileStmt()
+}
+
+void IfStmt() :
+{
+  Token op;
+}
+{
+    <IF> <GPAR> ExprAssign() op = Rvalue() <DPAR> StatementBlockDef()
+
+    (
+      ( ( <ELSE> { codeGen( "#jpf_save" , op.image, "", "" ); }) ( (StatementBlockDef() | Stmt()) { codeGen( "#jp" , "", "", "" ); })  )
+      | { codeGen( "#jpf" , op.image, "", "" ); }
+    )
+
+}
+
+void Expr() : {}
+{
+    ExprAssign() (Affec())?
+}
+
+void ExprAssign() :
+{}
+{
+	(
+	  (
+	  ({ Token id1;} id1 = < ID > { preStack(new pair( "#pid" , id1.image )); }| { Token id3;} id3 = < NUMBER>  { preStack(new pair( "#const" , id3.image )); } )
+		({String op;}
+			(
+			  <ADD> { preStack(new pair( "#add" , "" ));}
+			| <SUB> { preStack(new pair( "#mines" , "" ));}
+			| <MUL> { preStack(new pair( "#mul" , "" ));}
+			| <DIV> { preStack(new pair( "#div" , "" ));}
+		)ExprAssign())?
+	) | ( <GPAR> ExprAssign() <DPAR> ))
+}
+
+void Affec():{}{
+  <AFFECT> ExprAssign() {preStack(new pair( "#finish" , "" ));}{ codeGen( "#assign" , "", "", "" ); } | Rvalue()
+}
+
+Token Rvalue() :
+{
+ Token op = null;
+}
+{
+  	{preStack(new pair( "#finish" , "" ));} ( op = <LT> | op = <GT> | op = <EQ> | op = <NEQ> | op = <GTE> | op = <LTE>  ) ExprAssign() {preStack(new pair( "#finish" , "" ));} { codeGen( "#save" , "", "", "" );codeGen( "#save" , "", "", "" );codeGen( "#save" , "", "", "" );codeGen( "#save" , "", "", "" ); }
+	{return op;}
+
+}
+
+
+void WhileStmt() :
+{
+ Token op;
+}
+{
+    <WHILE> <GPAR> { codeGen( "#save_pointer" , "", "", "" ); } ExprAssign() op = Rvalue() <DPAR> (StatementBlockDef() | Stmt()) { codeGen( "#while" , op.image, "", "" ); }
+}
+
+void ForStmt() :
+{
+ Token op = null;
+}
+{
+	<FOR> <GPAR> (varDefineDef() | ExprAssign())? ";" { codeGen( "#save_pointer" , "", "", "" ); } ( ExprAssign() op = Rvalue())?  { codeGen( "#save" , "", "", "" ); }  <POINTVIRGULE> { codeGen( "#save_pointer" , "", "", "" ); } (( { Token id;} id = < ID > { codeGen( "#pid" , id.image, "", "" ); } <AFFECT> ExprAssign(){preStack(new pair( "#finish" , "" ));} { codeGen( "#assign" , "", "", "" ); }))? { codeGen( "#save" , "", "", "" ); }
+	<DPAR>
+		{ codeGen( "#for_jp_statement" , "", "", "" ); }
+	      (StatementBlockDef())
+	    { if(op != null)codeGen( "#for" , op.image, "", "" );else codeGen( "#for" , "nothing", "", "" );}
+}
+
